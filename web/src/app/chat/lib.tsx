@@ -244,20 +244,23 @@ export async function* sendMessage({
     use_agentic_search: useLanggraph ?? false,
   });
 
+  const controller = new AbortController();
+  signal?.addEventListener("abort", () => controller.abort(), { once: true });
+
   const response = await fetch(`/api/chat/send-message`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body,
-    signal,
+    signal: controller.signal,
   });
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
 
-  yield* handleSSEStream<PacketType>(response, signal);
+  yield* handleSSEStream<PacketType>(response);
 }
 
 export async function nameChatSession(chatSessionId: string) {
