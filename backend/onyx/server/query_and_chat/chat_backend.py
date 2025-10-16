@@ -652,7 +652,9 @@ def seed_chat(
         root_message = get_or_create_root_message(
             chat_session_id=new_chat_session.id, db_session=db_session
         )
-        llm, fast_llm = get_llms_for_persona(persona=new_chat_session.persona)
+        llm, _ = get_llms_for_persona(
+            persona=new_chat_session.persona,
+        )
 
         tokenizer = get_tokenizer(
             model_name=llm.config.model_name,

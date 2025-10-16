@@ -93,7 +93,9 @@ def compute_max_document_tokens_for_persona(
     # Use the persona directly since prompts are now embedded
     return compute_max_document_tokens(
         prompt_config=PromptConfig.from_model(persona),
-        llm_config=get_main_llm_from_tuple(get_llms_for_persona(persona)).config,
+        llm_config=get_main_llm_from_tuple(
+            get_llms_for_persona(persona=persona)
+        ).config,
         actual_user_input=actual_user_input,
     )
 

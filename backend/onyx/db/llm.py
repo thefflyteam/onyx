@@ -1,5 +1,4 @@
 from sqlalchemy import delete
-from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import selectinload
@@ -10,8 +9,10 @@ from onyx.configs.constants import AuthType
 from onyx.db.models import CloudEmbeddingProvider as CloudEmbeddingProviderModel
 from onyx.db.models import DocumentSet
 from onyx.db.models import LLMProvider as LLMProviderModel
+from onyx.db.models import LLMProvider__Persona
 from onyx.db.models import LLMProvider__UserGroup
 from onyx.db.models import ModelConfiguration
+from onyx.db.models import Persona
 from onyx.db.models import SearchSettings
 from onyx.db.models import Tool as ToolModel
 from onyx.db.models import User
@@ -44,6 +45,100 @@ def update_group_llm_provider_relationships__no_commit(
             for group_id in group_ids
         ]
         db_session.add_all(new_relationships)
+
+
+def update_llm_provider_persona_relationships__no_commit(
+    *,
+    db_session: Session,
+    llm_provider_id: int,
+    persona_ids: list[int] | None,
+) -> None:
+    """Replace the persona restrictions for a provider within an open transaction."""
+    db_session.execute(
+        delete(LLMProvider__Persona).where(
+            LLMProvider__Persona.llm_provider_id == llm_provider_id
+        )
+    )
+
+    if persona_ids:
+        db_session.add_all(
+            LLMProvider__Persona(
+                llm_provider_id=llm_provider_id,
+                persona_id=persona_id,
+            )
+            for persona_id in persona_ids
+        )
+
+
+def get_personas_for_llm_provider(
+    db_session: Session, llm_provider_id: int
+) -> list[int]:
+    """Return persona IDs that explicitly allow the given provider."""
+    return list(
+        db_session.scalars(
+            select(LLMProvider__Persona.persona_id).where(
+                LLMProvider__Persona.llm_provider_id == llm_provider_id
+            )
+        ).all()
+    )
+
+
+def is_llm_provider_effectively_public(provider: LLMProviderModel) -> bool:
+    """Determine whether a provider should be treated as unrestricted.
+
+    Explicitly public providers are always accessible. Providers with no group
+    or persona restrictions are also treated as public to preserve historical
+    behaviour where `is_public=False` with empty restrictions still allowed
+    universal access.
+    """
+    return provider.is_public or (not provider.groups and not provider.personas)
+
+
+def can_user_access_llm_provider(
+    *,
+    db_session: Session,
+    provider: LLMProviderModel,
+    user: User | None,
+    persona: Persona | None,
+    user_group_ids: set[int] | None = None,
+) -> bool:
+    """Check if a user may use an LLM provider, applying OR-based restrictions.
+
+    Access is granted when ANY of the following are true:
+    - The provider is effectively public (explicitly public, or no group/persona restrictions)
+    - The user belongs to one of the provider's allowed user groups
+    - The active persona is explicitly allowed by the provider
+
+    Empty restriction lists are treated as unrestricted to avoid accidentally
+    locking providers when both lists are blank. Callers may provide
+    ``user_group_ids`` to skip re-querying group membership.
+    """
+    if is_llm_provider_effectively_public(provider):
+        return True
+
+    allowed_group_ids = {group.id for group in provider.groups}
+    if user and allowed_group_ids:
+        resolved_user_group_ids = (
+            user_group_ids
+            if user_group_ids is not None
+            else set(
+                db_session.scalars(
+                    select(User__UserGroup.user_group_id).where(
+                        User__UserGroup.user_id == user.id
+                    )
+                ).all()
+            )
+        )
+        if resolved_user_group_ids & allowed_group_ids:
+            return True
+
+    persona_id = persona.id if isinstance(persona, Persona) else None
+    if persona_id is not None:
+        provider_persona_ids = {allowed.id for allowed in provider.personas}
+        if persona_id in provider_persona_ids:
+            return True
+
+    return False
 
 
 def upsert_cloud_embedding_provider(
@@ -155,11 +250,18 @@ def fetch_existing_llm_providers(
     only_public: bool = False,
 ) -> list[LLMProviderModel]:
     stmt = select(LLMProviderModel).options(
-        selectinload(LLMProviderModel.model_configurations)
+        selectinload(LLMProviderModel.model_configurations),
+        selectinload(LLMProviderModel.groups),
+        selectinload(LLMProviderModel.personas),
     )
+    providers = list(db_session.scalars(stmt).all())
     if only_public:
-        stmt = stmt.where(LLMProviderModel.is_public == True)  # noqa: E712
-    return list(db_session.scalars(stmt).all())
+        return [
+            provider
+            for provider in providers
+            if is_llm_provider_effectively_public(provider)
+        ]
+    return providers
 
 
 def fetch_existing_llm_provider(
@@ -168,7 +270,11 @@ def fetch_existing_llm_provider(
     provider_model = db_session.scalar(
         select(LLMProviderModel)
         .where(LLMProviderModel.name == name)
-        .options(selectinload(LLMProviderModel.model_configurations))
+        .options(
+            selectinload(LLMProviderModel.model_configurations),
+            selectinload(LLMProviderModel.groups),
+            selectinload(LLMProviderModel.personas),
+        )
     )
 
     return provider_model
@@ -178,32 +284,39 @@ def fetch_existing_llm_providers_for_user(
     db_session: Session,
     user: User | None = None,
 ) -> list[LLMProviderModel]:
+    providers = fetch_existing_llm_providers(db_session)
+
     # if user is anonymous
     if not user:
         # Only fetch public providers if auth is turned on
-        return fetch_existing_llm_providers(
-            db_session, only_public=AUTH_TYPE != AuthType.DISABLED
-        )
+        if AUTH_TYPE == AuthType.DISABLED:
+            return providers
+        return [
+            provider
+            for provider in providers
+            if is_llm_provider_effectively_public(provider)
+        ]
 
-    stmt = (
-        select(LLMProviderModel)
-        .options(selectinload(LLMProviderModel.model_configurations))
-        .distinct()
-    )
-    user_groups_select = select(User__UserGroup.user_group_id).where(
-        User__UserGroup.user_id == user.id
-    )
-    access_conditions = or_(
-        LLMProviderModel.is_public,
-        LLMProviderModel.id.in_(  # User is part of a group that has access
-            select(LLMProvider__UserGroup.llm_provider_id).where(
-                LLMProvider__UserGroup.user_group_id.in_(user_groups_select)  # type: ignore
+    user_group_ids = set(
+        db_session.scalars(
+            select(User__UserGroup.user_group_id).where(
+                User__UserGroup.user_id == user.id
             )
-        ),
+        ).all()
     )
-    stmt = stmt.where(access_conditions)
 
-    return list(db_session.scalars(stmt).all())
+    accessible_providers: list[LLMProviderModel] = []
+    for provider in providers:
+        if can_user_access_llm_provider(
+            db_session=db_session,
+            provider=provider,
+            user=user,
+            persona=None,
+            user_group_ids=user_group_ids,
+        ):
+            accessible_providers.append(provider)
+
+    return accessible_providers
 
 
 def fetch_embedding_provider(
@@ -271,6 +384,11 @@ def remove_llm_provider(db_session: Session, provider_id: int) -> None:
     db_session.execute(
         delete(LLMProvider__UserGroup).where(
             LLMProvider__UserGroup.llm_provider_id == provider_id
+        )
+    )
+    db_session.execute(
+        delete(LLMProvider__Persona).where(
+            LLMProvider__Persona.llm_provider_id == provider_id
         )
     )
     # Remove LLMProvider
