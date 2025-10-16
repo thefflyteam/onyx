@@ -13,6 +13,8 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
 from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
 
 from onyx.auth.users import current_admin_user
@@ -22,10 +24,14 @@ from onyx.db.engine.sql_engine import get_session
 from onyx.db.llm import fetch_existing_llm_provider
 from onyx.db.llm import fetch_existing_llm_providers
 from onyx.db.llm import fetch_existing_llm_providers_for_user
+from onyx.db.llm import is_llm_provider_effectively_public
 from onyx.db.llm import remove_llm_provider
 from onyx.db.llm import update_default_provider
 from onyx.db.llm import update_default_vision_provider
+from onyx.db.llm import update_llm_provider_persona_relationships__no_commit
 from onyx.db.llm import upsert_llm_provider
+from onyx.db.models import LLMProvider as LLMProviderModel
+from onyx.db.models import Persona
 from onyx.db.models import User
 from onyx.llm.factory import get_default_llms
 from onyx.llm.factory import get_llm
@@ -38,9 +44,12 @@ from onyx.llm.utils import litellm_exception_to_error_msg
 from onyx.llm.utils import model_supports_image_input
 from onyx.llm.utils import test_llm
 from onyx.server.manage.llm.models import BedrockModelsRequest
+from onyx.server.manage.llm.models import GrantProviderAccessRequest
 from onyx.server.manage.llm.models import LLMCost
 from onyx.server.manage.llm.models import LLMProviderDescriptor
 from onyx.server.manage.llm.models import LLMProviderUpsertRequest
+from onyx.server.manage.llm.models import LLMProviderUsagePersona
+from onyx.server.manage.llm.models import LLMProviderUsageResponse
 from onyx.server.manage.llm.models import LLMProviderView
 from onyx.server.manage.llm.models import ModelConfigurationUpsertRequest
 from onyx.server.manage.llm.models import OllamaFinalModelResponse
@@ -58,6 +67,13 @@ logger = setup_logger()
 
 admin_router = APIRouter(prefix="/admin/llm")
 basic_router = APIRouter(prefix="/llm")
+
+
+def _mask_provider_api_key(provider_view: LLMProviderView) -> None:
+    if provider_view.api_key:
+        provider_view.api_key = (
+            provider_view.api_key[:4] + "****" + provider_view.api_key[-4:]
+        )
 
 
 @admin_router.get("/built-in/options")
@@ -178,10 +194,7 @@ def list_llm_providers(
             f"LLMProviderView.from_model took {from_model_duration:.2f} seconds"
         )
 
-        if full_llm_provider.api_key:
-            full_llm_provider.api_key = (
-                full_llm_provider.api_key[:4] + "****" + full_llm_provider.api_key[-4:]
-            )
+        _mask_provider_api_key(full_llm_provider)
         llm_provider_list.append(full_llm_provider)
 
     end_time = datetime.now(timezone.utc)
@@ -217,6 +230,27 @@ def put_llm_provider(
             status_code=400,
             detail=f"LLM Provider with name {llm_provider_upsert_request.name} does not exist",
         )
+
+    persona_ids = llm_provider_upsert_request.personas
+    if persona_ids:
+        fetched_persona_ids = set(
+            db_session.scalars(
+                select(Persona.id).where(Persona.id.in_(persona_ids))
+            ).all()
+        )
+        missing_personas = sorted(set(persona_ids) - fetched_persona_ids)
+        if missing_personas:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid persona IDs: {', '.join(map(str, missing_personas))}",
+            )
+        # Remove duplicates while preserving order
+        seen: set[int] = set()
+        llm_provider_upsert_request.personas = [
+            persona_id
+            for persona_id in persona_ids
+            if not (persona_id in seen or seen.add(persona_id))
+        ]
 
     default_model_found = False
     default_fast_model_found = False
@@ -269,7 +303,56 @@ def delete_llm_provider(
     _: User | None = Depends(current_admin_user),
     db_session: Session = Depends(get_session),
 ) -> None:
+    provider = db_session.get(LLMProviderModel, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="LLM Provider not found")
+
+    in_use_personas = list(
+        db_session.scalars(
+            select(Persona.name).where(
+                Persona.llm_model_provider_override == provider.name,
+                Persona.deleted == False,  # noqa: E712
+            )
+        ).all()
+    )
+    if in_use_personas:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": (
+                    "Cannot delete provider while the following assistants reference it."
+                ),
+                "personas": in_use_personas,
+            },
+        )
+
     remove_llm_provider(db_session, provider_id)
+
+
+@admin_router.get("/provider/{provider_id}/usage")
+def get_llm_provider_usage(
+    provider_id: int,
+    _: User | None = Depends(current_admin_user),
+    db_session: Session = Depends(get_session),
+) -> LLMProviderUsageResponse:
+    provider = db_session.get(LLMProviderModel, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="LLM Provider not found")
+
+    personas = list(
+        db_session.scalars(
+            select(Persona).where(
+                Persona.llm_model_provider_override == provider.name,
+                Persona.deleted == False,  # noqa: E712
+            )
+        ).all()
+    )
+    return LLMProviderUsageResponse(
+        personas=[
+            LLMProviderUsagePersona(id=persona.id, name=persona.name)
+            for persona in personas
+        ]
+    )
 
 
 @admin_router.post("/provider/{provider_id}/default")
@@ -402,6 +485,108 @@ def get_provider_contextual_cost(
             )
 
     return costs
+
+
+@admin_router.get("/persona/{persona_id}/available-providers")
+def get_available_providers_for_persona(
+    persona_id: int,
+    _: User | None = Depends(current_admin_user),
+    db_session: Session = Depends(get_session),
+) -> list[LLMProviderView]:
+    persona = db_session.scalar(
+        select(Persona)
+        .options(selectinload(Persona.groups))
+        .where(Persona.id == persona_id, Persona.deleted == False)  # noqa: E712
+    )
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    persona_group_ids = {group.id for group in persona.groups}
+    available_providers: list[LLMProviderView] = []
+    for provider in fetch_existing_llm_providers(db_session):
+        provider_persona_ids = {p.id for p in provider.personas}
+        provider_group_ids = {group.id for group in provider.groups}
+
+        if is_llm_provider_effectively_public(provider) or (
+            persona.id in provider_persona_ids or persona_group_ids & provider_group_ids
+        ):
+            provider_view = LLMProviderView.from_model(provider)
+            _mask_provider_api_key(provider_view)
+            available_providers.append(provider_view)
+
+    return available_providers
+
+
+@admin_router.get("/persona/new/available-providers")
+def get_available_providers_for_new_persona(
+    _: User | None = Depends(current_admin_user),
+    db_session: Session = Depends(get_session),
+) -> list[LLMProviderView]:
+    providers: list[LLMProviderView] = []
+    for provider in fetch_existing_llm_providers(db_session):
+        if not is_llm_provider_effectively_public(provider):
+            continue
+        provider_view = LLMProviderView.from_model(provider)
+        _mask_provider_api_key(provider_view)
+        providers.append(provider_view)
+    return providers
+
+
+@basic_router.get("/unrestricted-providers")
+def list_unrestricted_llm_providers(
+    user: User | None = Depends(current_chat_accessible_user),
+    db_session: Session = Depends(get_session),
+) -> list[LLMProviderDescriptor]:
+    descriptors: list[LLMProviderDescriptor] = []
+    for provider in fetch_existing_llm_providers(db_session):
+        if not is_llm_provider_effectively_public(provider):
+            continue
+        descriptors.append(LLMProviderDescriptor.from_model(provider))
+    return descriptors
+
+
+@admin_router.post("/persona/{persona_id}/grant-provider-access")
+def grant_persona_access_to_provider(
+    persona_id: int,
+    request: GrantProviderAccessRequest,
+    _: User | None = Depends(current_admin_user),
+    db_session: Session = Depends(get_session),
+) -> LLMProviderView:
+    persona = db_session.scalar(
+        select(Persona)
+        .options(selectinload(Persona.groups))
+        .where(Persona.id == persona_id, Persona.deleted == False)  # noqa: E712
+    )
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    provider = db_session.scalar(
+        select(LLMProviderModel)
+        .options(
+            selectinload(LLMProviderModel.groups),
+            selectinload(LLMProviderModel.personas),
+            selectinload(LLMProviderModel.model_configurations),
+        )
+        .where(LLMProviderModel.id == request.provider_id)
+    )
+    if not provider:
+        raise HTTPException(status_code=404, detail="LLM Provider not found")
+
+    existing_persona_ids = [p.id for p in provider.personas]
+    if persona.id not in existing_persona_ids:
+        updated_persona_ids = [*existing_persona_ids, persona.id]
+        update_llm_provider_persona_relationships__no_commit(
+            db_session=db_session,
+            llm_provider_id=provider.id,
+            persona_ids=updated_persona_ids,
+        )
+        db_session.flush()
+        db_session.refresh(provider)
+
+    provider_view = LLMProviderView.from_model(provider)
+    _mask_provider_api_key(provider_view)
+    db_session.commit()
+    return provider_view
 
 
 @admin_router.post("/bedrock/available-models")

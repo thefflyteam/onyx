@@ -38,6 +38,7 @@ def assert_response_is_equivalent(
     assert provider_data is not None
 
     assert provider_data["default_model_name"] == default_model_name
+    assert provider_data["personas"] == []
 
     def fill_max_input_tokens_and_supports_image_input(
         req: ModelConfigurationUpsertRequest,

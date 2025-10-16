@@ -218,6 +218,14 @@ def upsert_llm_provider(
         group_ids=llm_provider_upsert_request.groups,
         db_session=db_session,
     )
+    update_llm_provider_persona_relationships__no_commit(
+        db_session=db_session,
+        llm_provider_id=existing_llm_provider.id,
+        persona_ids=llm_provider_upsert_request.personas,
+    )
+
+    db_session.flush()
+    db_session.refresh(existing_llm_provider)
     full_llm_provider = LLMProviderView.from_model(existing_llm_provider)
 
     db_session.commit()
