@@ -53,6 +53,7 @@ import SvgSliders from "@/icons/sliders";
 import Text from "@/refresh-components/texts/Text";
 import InputTypeIn from "@/refresh-components/inputs/InputTypeIn";
 import { cn } from "@/lib/utils";
+import { useToolOAuthStatus } from "@/lib/hooks/useToolOAuthStatus";
 
 // Get source metadata for configured sources - deduplicated by source type
 function getConfiguredSources(
@@ -96,6 +97,11 @@ interface ActionItemProps {
   onSourceManagementOpen?: () => void;
   hasNoConnectors?: boolean;
   tooltipSide?: "top" | "right" | "bottom" | "left";
+  oauthStatus?: {
+    has_token: boolean;
+    is_expired: boolean;
+  };
+  onOAuthAuthenticate?: () => void;
 }
 
 function ActionItem({
@@ -109,6 +115,8 @@ function ActionItem({
   onSourceManagementOpen,
   hasNoConnectors = false,
   tooltipSide = "left",
+  oauthStatus,
+  onOAuthAuthenticate,
 }: ActionItemProps) {
   // If a tool is provided, derive the icon and label from it
   const Icon = tool ? getIconForAction(tool) : ProvidedIcon!;
@@ -177,6 +185,36 @@ function ActionItem({
               </span>
             </div>
             <div className="flex items-center gap-2">
+              {/* OAuth Authentication Indicator */}
+              {tool?.oauth_config_id && oauthStatus && (
+                <div
+                  className="flex items-center gap-2 transition-opacity duration-200 opacity-0 group-hover:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!oauthStatus.has_token || oauthStatus.is_expired) {
+                      onOAuthAuthenticate?.();
+                    }
+                  }}
+                >
+                  {!oauthStatus.has_token || oauthStatus.is_expired ? (
+                    <FiKey
+                      size={16}
+                      className="transition-colors cursor-pointer text-yellow-500 hover:text-yellow-600"
+                      title={
+                        oauthStatus.is_expired
+                          ? "OAuth token expired - click to re-authenticate"
+                          : "Click to authenticate"
+                      }
+                    />
+                  ) : (
+                    <FiCheck
+                      size={16}
+                      className="text-green-500"
+                      title="Authenticated"
+                    />
+                  )}
+                </div>
+              )}
               {!isSearchToolWithNoConnectors && (
                 <div
                   className={`
@@ -383,6 +421,13 @@ interface MCPToolsListProps {
   selectedAssistant: MinimalPersonaSnapshot;
   preventMainPopupClose: () => void;
   onSourceManagementOpen?: () => void;
+  getOAuthStatusForTool: (tool: ToolSnapshot) =>
+    | {
+        has_token: boolean;
+        is_expired: boolean;
+      }
+    | undefined;
+  authenticateTool: (tool: ToolSnapshot) => Promise<void>;
 }
 
 function MCPToolsList({
@@ -392,6 +437,8 @@ function MCPToolsList({
   selectedAssistant,
   preventMainPopupClose,
   onSourceManagementOpen,
+  getOAuthStatusForTool,
+  authenticateTool,
 }: MCPToolsListProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const {
@@ -507,6 +554,8 @@ function MCPToolsList({
               onSourceManagementOpen={onSourceManagementOpen}
               hasNoConnectors={false}
               tooltipSide="right"
+              oauthStatus={getOAuthStatusForTool(tool)}
+              onOAuthAuthenticate={() => authenticateTool(tool)}
             />
           ))
         )}
@@ -534,6 +583,11 @@ export function ActionToggle({
   const [showTopShadow, setShowTopShadow] = useState(false);
   const { selectedSources, setSelectedSources } = filterManager;
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+
+  // Use the OAuth hook
+  const { getOAuthStatusForTool, authenticateTool } = useToolOAuthStatus(
+    selectedAssistant.id
+  );
 
   const { enableAllSources, disableAllSources, toggleSource, isSourceEnabled } =
     useSourcePreferences({
@@ -1196,6 +1250,8 @@ export function ActionToggle({
                     }}
                     onSourceManagementOpen={() => setShowSourceManagement(true)}
                     hasNoConnectors={hasNoConnectors}
+                    oauthStatus={getOAuthStatusForTool(tool)}
+                    onOAuthAuthenticate={() => authenticateTool(tool)}
                   />
                 ))}
 
@@ -1383,6 +1439,8 @@ export function ActionToggle({
                   preventCloseRef.current = true;
                 }}
                 onSourceManagementOpen={() => setShowSourceManagement(true)}
+                getOAuthStatusForTool={getOAuthStatusForTool}
+                authenticateTool={authenticateTool}
               />
             </div>,
             document.body
