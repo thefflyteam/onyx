@@ -21,9 +21,9 @@ from onyx.auth.users import current_admin_user
 from onyx.auth.users import current_chat_accessible_user
 from onyx.configs.model_configs import GEN_AI_MODEL_FALLBACK_MAX_TOKENS
 from onyx.db.engine.sql_engine import get_session
+from onyx.db.llm import can_user_access_llm_provider
 from onyx.db.llm import fetch_existing_llm_provider
 from onyx.db.llm import fetch_existing_llm_providers
-from onyx.db.llm import fetch_existing_llm_providers_for_user
 from onyx.db.llm import is_llm_provider_effectively_public
 from onyx.db.llm import remove_llm_provider
 from onyx.db.llm import update_default_provider
@@ -33,6 +33,7 @@ from onyx.db.llm import upsert_llm_provider
 from onyx.db.models import LLMProvider as LLMProviderModel
 from onyx.db.models import Persona
 from onyx.db.models import User
+from onyx.db.models import User__UserGroup
 from onyx.llm.factory import get_default_llms
 from onyx.llm.factory import get_llm
 from onyx.llm.factory import get_max_input_tokens_from_llm_provider
@@ -419,14 +420,49 @@ def get_vision_capable_providers(
 
 @basic_router.get("/provider")
 def list_llm_provider_basics(
+    persona_id: int | None = Query(
+        None, description="Filter providers by persona access"
+    ),
     user: User | None = Depends(current_chat_accessible_user),
     db_session: Session = Depends(get_session),
 ) -> list[LLMProviderDescriptor]:
     start_time = datetime.now(timezone.utc)
     logger.debug("Starting to fetch basic LLM providers for user")
 
+    # If persona_id provided, fetch persona and filter by persona access
+    persona: Persona | None = None
+    if persona_id is not None:
+        persona = db_session.scalar(
+            select(Persona)
+            .options(selectinload(Persona.groups))
+            .where(Persona.id == persona_id, Persona.deleted == False)  # noqa: E712
+        )
+        if not persona:
+            raise HTTPException(status_code=404, detail="Persona not found")
+
+    # Get user's group IDs once
+    user_group_ids: set[int] | None = None
+    if user:
+        user_group_ids = set(
+            db_session.scalars(
+                select(User__UserGroup.user_group_id).where(
+                    User__UserGroup.user_id == user.id
+                )
+            ).all()
+        )
+
     llm_provider_list: list[LLMProviderDescriptor] = []
-    for llm_provider_model in fetch_existing_llm_providers_for_user(db_session, user):
+    for llm_provider_model in fetch_existing_llm_providers(db_session):
+        # Apply filtering with persona if provided
+        if not can_user_access_llm_provider(
+            db_session=db_session,
+            provider=llm_provider_model,
+            user=user,
+            persona=persona,
+            user_group_ids=user_group_ids,
+        ):
+            continue
+
         from_model_start = datetime.now(timezone.utc)
         full_llm_provider = LLMProviderDescriptor.from_model(llm_provider_model)
         from_model_end = datetime.now(timezone.utc)
@@ -515,21 +551,6 @@ def get_available_providers_for_persona(
             available_providers.append(provider_view)
 
     return available_providers
-
-
-@admin_router.get("/persona/new/available-providers")
-def get_available_providers_for_new_persona(
-    _: User | None = Depends(current_admin_user),
-    db_session: Session = Depends(get_session),
-) -> list[LLMProviderView]:
-    providers: list[LLMProviderView] = []
-    for provider in fetch_existing_llm_providers(db_session):
-        if not is_llm_provider_effectively_public(provider):
-            continue
-        provider_view = LLMProviderView.from_model(provider)
-        _mask_provider_api_key(provider_view)
-        providers.append(provider_view)
-    return providers
 
 
 @basic_router.get("/unrestricted-providers")

@@ -25,6 +25,7 @@ import { PopupSpec } from "@/components/admin/connectors/Popup";
 import * as Yup from "yup";
 import isEqual from "lodash/isEqual";
 import { IsPublicGroupSelector } from "@/components/IsPublicGroupSelector";
+import { PersonasMultiSelect } from "@/components/PersonasMultiSelect";
 import SvgTrash from "@/icons/trash";
 
 function AutoFetchModelsOnEdit({
@@ -159,6 +160,7 @@ export function LLMProviderUpdateForm({
       ),
     is_public: existingLlmProvider?.is_public ?? true,
     groups: existingLlmProvider?.groups ?? [],
+    personas: existingLlmProvider?.personas ?? [],
     model_configurations: existingLlmProvider?.model_configurations ?? [],
     deployment_name: existingLlmProvider?.deployment_name,
 
@@ -254,6 +256,7 @@ export function LLMProviderUpdateForm({
     // EE Only
     is_public: Yup.boolean().required(),
     groups: Yup.array().of(Yup.number()),
+    personas: Yup.array().of(Yup.number()),
     selected_model_names: Yup.array().of(Yup.string()),
     fetched_model_configurations: Yup.array(),
   });
@@ -702,6 +705,11 @@ export function LLMProviderUpdateForm({
                         objectName="LLM Provider"
                         publicToWhom="Users"
                         enforceGroupSelection={true}
+                      />
+                      <PersonasMultiSelect
+                        formikProps={formikProps}
+                        label="Assistant Whitelist (Optional)"
+                        subtext="Restrict this provider to specific assistants. If none selected, all assistants that the user has access to can use this provider."
                       />
                     </>
                   )}

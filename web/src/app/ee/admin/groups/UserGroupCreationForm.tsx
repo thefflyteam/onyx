@@ -16,6 +16,7 @@ interface UserGroupCreationFormProps {
   users: User[];
   ccPairs: ConnectorStatus<any, any>[];
   existingUserGroup?: UserGroup;
+  onGroupCreated?: (groupId: number) => void;
 }
 
 export const UserGroupCreationForm = ({
@@ -24,6 +25,7 @@ export const UserGroupCreationForm = ({
   users,
   ccPairs,
   existingUserGroup,
+  onGroupCreated,
 }: UserGroupCreationFormProps) => {
   const isUpdate = existingUserGroup !== undefined;
 
@@ -58,12 +60,19 @@ export const UserGroupCreationForm = ({
             response = await createUserGroup(values);
             formikHelpers.setSubmitting(false);
             if (response.ok) {
+              const createdGroup = await response.json();
               setPopup({
                 message: isUpdate
                   ? "Successfully updated user group!"
                   : "Successfully created user group!",
                 type: "success",
               });
+
+              // Call the onGroupCreated callback with the new group's ID
+              if (onGroupCreated && createdGroup.id) {
+                onGroupCreated(createdGroup.id);
+              }
+
               onClose();
             } else {
               const responseJson = await response.json();

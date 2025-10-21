@@ -5,6 +5,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { getDisplayNameForModel, LlmDescriptor, LlmManager } from "@/lib/hooks";
+import { LLMProviderDescriptor } from "@/app/admin/configuration/llm/interfaces";
 import { modelSupportsImageInput, structureValue } from "@/lib/llm/utils";
 import { getProviderIcon } from "@/app/admin/configuration/llm/utils";
 import { Slider } from "@/components/ui/slider";
@@ -21,6 +22,7 @@ interface LLMPopoverProps {
   folded?: boolean;
   onSelect?: (value: string) => void;
   currentModelName?: string;
+  llmProviders?: LLMProviderDescriptor[];
 }
 
 export default function LLMPopover({
@@ -29,8 +31,12 @@ export default function LLMPopover({
   folded,
   onSelect,
   currentModelName,
+  llmProviders: propLlmProviders,
 }: LLMPopoverProps) {
-  const { llmProviders } = useChatContext();
+  const { llmProviders: contextLlmProviders } = useChatContext();
+
+  // Use providers from props if provided, otherwise fall back to context
+  const llmProviders = propLlmProviders ?? contextLlmProviders;
 
   const [open, setOpen] = useState(false);
   const { user } = useUser();
@@ -88,27 +94,24 @@ export default function LLMPopover({
     ]
   );
 
-  const llmOptionsToChooseFrom = useMemo(
-    () =>
-      llmProviders.flatMap((llmProvider) =>
-        llmProvider.model_configurations
-          .filter(
-            (modelConfiguration) =>
-              modelConfiguration.is_visible ||
-              modelConfiguration.name === currentModelName
-          )
-          .map((modelConfiguration) => ({
-            name: llmProvider.name,
-            provider: llmProvider.provider,
-            modelName: modelConfiguration.name,
-            icon: getProviderIcon(
-              llmProvider.provider,
-              modelConfiguration.name
-            ),
-          }))
-      ),
-    [llmProviders]
-  );
+  const llmOptionsToChooseFrom = useMemo(() => {
+    const options = llmProviders.flatMap((llmProvider) =>
+      llmProvider.model_configurations
+        .filter(
+          (modelConfiguration) =>
+            modelConfiguration.is_visible ||
+            modelConfiguration.name === currentModelName
+        )
+        .map((modelConfiguration) => ({
+          name: llmProvider.name,
+          provider: llmProvider.provider,
+          modelName: modelConfiguration.name,
+          icon: getProviderIcon(llmProvider.provider, modelConfiguration.name),
+        }))
+    );
+
+    return options;
+  }, [llmProviders, currentModelName]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -121,32 +124,42 @@ export default function LLMPopover({
         className="max-h-[20rem] w-[15rem] p-spacing-inline border rounded-08 shadow-lg flex flex-col"
       >
         <div className="overflow-y-scroll">
-          {llmOptionsToChooseFrom.map(
-            ({ modelName, provider, name, icon }, index) => {
-              if (
-                requiresImageGeneration &&
-                !modelSupportsImageInput(llmProviders, modelName, name)
-              )
-                return null;
-              return (
-                <LineItem
-                  key={index}
-                  icon={({ className }) => icon({ size: 16, className })}
-                  onClick={() => {
-                    llmManager.updateCurrentLlm({
-                      modelName,
-                      provider,
-                      name,
-                    } as LlmDescriptor);
-                    onSelect?.(structureValue(name, provider, modelName));
-                    setOpen(false);
-                  }}
-                >
-                  {getDisplayNameForModel(modelName)}
-                </LineItem>
-              );
-            }
-          )}
+          {(() => {
+            const renderedModels: string[] = [];
+            const filteredModels: string[] = [];
+
+            const items = llmOptionsToChooseFrom.map(
+              ({ modelName, provider, name, icon }, index) => {
+                if (
+                  requiresImageGeneration &&
+                  !modelSupportsImageInput(llmProviders, modelName, name)
+                ) {
+                  filteredModels.push(modelName);
+                  return null;
+                }
+                renderedModels.push(modelName);
+                return (
+                  <LineItem
+                    key={index}
+                    icon={({ className }) => icon({ size: 16, className })}
+                    onClick={() => {
+                      llmManager.updateCurrentLlm({
+                        modelName,
+                        provider,
+                        name,
+                      } as LlmDescriptor);
+                      onSelect?.(structureValue(name, provider, modelName));
+                      setOpen(false);
+                    }}
+                  >
+                    {getDisplayNameForModel(modelName)}
+                  </LineItem>
+                );
+              }
+            );
+
+            return items;
+          })()}
         </div>
         {user?.preferences?.temperature_override_enabled && (
           <div className="flex flex-col w-full py-padding-button px-spacing-interline gap-spacing-interline">
