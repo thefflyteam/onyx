@@ -18,8 +18,23 @@ import {
   UserSpecificAssistantPreferences,
 } from "@/lib/types";
 import { useAssistantPreferences } from "@/app/chat/hooks/useAssistantPreferences";
-import useSWR from "swr";
-import { errorHandlingFetcher } from "@/lib/fetcher";
+
+async function fetchAllAgents(): Promise<MinimalPersonaSnapshot[]> {
+  try {
+    const response = await fetch("/api/persona", {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) throw new Error("Failed to fetch agents");
+    const agents: MinimalPersonaSnapshot[] = await response.json();
+    return agents;
+  } catch (error) {
+    console.error("Error fetching agents:", error);
+    return [];
+  }
+}
 
 async function pinAgents(pinnedAgentIds: number[]) {
   console.log(pinnedAgentIds);
@@ -61,17 +76,9 @@ export function AgentsProvider({
   pinnedAgentIds: initialPinnedAgentIds,
   children,
 }: AgentsProviderProps) {
-  // Use SWR for agents list - this enables global cache invalidation via mutate()
-  const { data: agents, mutate: refreshAgents } = useSWR<
-    MinimalPersonaSnapshot[]
-  >("/api/persona", errorHandlingFetcher, {
-    fallbackData: initialAgents, // Use SSR data on initial render
-    revalidateOnFocus: false, // Don't refetch on window focus (too aggressive)
-    revalidateOnReconnect: true, // Refetch when reconnecting to internet
-  });
-
+  const [agents, setAgents] = useState<MinimalPersonaSnapshot[]>(initialAgents);
   const [pinnedAgents, setPinnedAgents] = useState<MinimalPersonaSnapshot[]>(
-    () => getPinnedAgents(agents || initialAgents, initialPinnedAgentIds)
+    () => getPinnedAgents(agents, initialPinnedAgentIds)
   );
 
   const { assistantPreferences, setSpecificAssistantPreferences } =
@@ -84,11 +91,15 @@ export function AgentsProvider({
   const currentAgentId = currentAgentIdRaw ? parseInt(currentAgentIdRaw) : null;
   const currentAgent = useMemo(
     () =>
-      currentAgentId && agents
+      currentAgentId
         ? agents.find((agent) => agent.id === currentAgentId) || null
         : null,
     [agents, currentAgentId]
   );
+
+  async function refreshAgents() {
+    setAgents(await fetchAllAgents());
+  }
 
   function togglePinnedAgent(
     agent: MinimalPersonaSnapshot,
@@ -113,10 +124,8 @@ export function AgentsProvider({
   return (
     <AgentsContext.Provider
       value={{
-        agents: agents || initialAgents, // Fallback to initial agents if SWR hasn't loaded yet
-        refreshAgents: async () => {
-          await refreshAgents(); // Wrap SWR mutate to match expected Promise<void> signature
-        },
+        agents,
+        refreshAgents,
         pinnedAgents,
         setPinnedAgents,
         togglePinnedAgent,

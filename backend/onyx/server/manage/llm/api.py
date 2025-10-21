@@ -24,7 +24,7 @@ from onyx.db.engine.sql_engine import get_session
 from onyx.db.llm import can_user_access_llm_provider
 from onyx.db.llm import fetch_existing_llm_provider
 from onyx.db.llm import fetch_existing_llm_providers
-from onyx.db.llm import is_llm_provider_effectively_public
+from onyx.db.llm import llm_provider_is_public
 from onyx.db.llm import remove_llm_provider
 from onyx.db.llm import update_default_provider
 from onyx.db.llm import update_default_vision_provider
@@ -150,7 +150,7 @@ def test_llm_configuration(
         client_error_msg = litellm_exception_to_error_msg(
             error, llm, fallback_to_error_msg=True
         )
-        raise HTTPException(status_code=400, detail=client_error_msg)
+        raise HTTPException(status_code=400, detail={"message": client_error_msg})
 
 
 @admin_router.post("/test/default")
@@ -161,7 +161,9 @@ def test_default_provider(
         llm, fast_llm = get_default_llms()
     except ValueError:
         logger.exception("Failed to fetch default LLM Provider")
-        raise HTTPException(status_code=400, detail="No LLM Provider setup")
+        raise HTTPException(
+            status_code=400, detail={"message": "No LLM Provider setup"}
+        )
 
     functions_with_args: list[tuple[Callable, tuple]] = [
         (test_llm, (llm,)),
@@ -174,7 +176,7 @@ def test_default_provider(
         parallel_results[1] if len(parallel_results) > 1 else None
     )
     if error:
-        raise HTTPException(status_code=400, detail=error)
+        raise HTTPException(status_code=400, detail={"message": str(error)})
 
 
 @admin_router.get("/provider")
@@ -224,12 +226,16 @@ def put_llm_provider(
     if existing_provider and is_creation:
         raise HTTPException(
             status_code=400,
-            detail=f"LLM Provider with name {llm_provider_upsert_request.name} already exists",
+            detail={
+                "message": f"LLM Provider with name {llm_provider_upsert_request.name} already exists"
+            },
         )
     elif not existing_provider and not is_creation:
         raise HTTPException(
             status_code=400,
-            detail=f"LLM Provider with name {llm_provider_upsert_request.name} does not exist",
+            detail={
+                "message": f"LLM Provider with name {llm_provider_upsert_request.name} does not exist"
+            },
         )
 
     persona_ids = llm_provider_upsert_request.personas
@@ -243,15 +249,18 @@ def put_llm_provider(
         if missing_personas:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid persona IDs: {', '.join(map(str, missing_personas))}",
+                detail={
+                    "message": f"Invalid persona IDs: {', '.join(map(str, missing_personas))}"
+                },
             )
         # Remove duplicates while preserving order
         seen: set[int] = set()
-        llm_provider_upsert_request.personas = [
-            persona_id
-            for persona_id in persona_ids
-            if not (persona_id in seen or seen.add(persona_id))
-        ]
+        deduplicated_personas: list[int] = []
+        for persona_id in persona_ids:
+            if persona_id not in seen:
+                seen.add(persona_id)
+                deduplicated_personas.append(persona_id)
+        llm_provider_upsert_request.personas = deduplicated_personas
 
     default_model_found = False
     default_fast_model_found = False
@@ -295,7 +304,7 @@ def put_llm_provider(
         )
     except ValueError as e:
         logger.exception("Failed to upsert LLM Provider")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"message": str(e)})
 
 
 @admin_router.delete("/provider/{provider_id}")
@@ -306,7 +315,9 @@ def delete_llm_provider(
 ) -> None:
     provider = db_session.get(LLMProviderModel, provider_id)
     if not provider:
-        raise HTTPException(status_code=404, detail="LLM Provider not found")
+        raise HTTPException(
+            status_code=404, detail={"message": "LLM Provider not found"}
+        )
 
     in_use_personas = list(
         db_session.scalars(
@@ -338,7 +349,9 @@ def get_llm_provider_usage(
 ) -> LLMProviderUsageResponse:
     provider = db_session.get(LLMProviderModel, provider_id)
     if not provider:
-        raise HTTPException(status_code=404, detail="LLM Provider not found")
+        raise HTTPException(
+            status_code=404, detail={"message": "LLM Provider not found"}
+        )
 
     personas = list(
         db_session.scalars(
@@ -438,7 +451,9 @@ def list_llm_provider_basics(
             .where(Persona.id == persona_id, Persona.deleted == False)  # noqa: E712
         )
         if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
+            raise HTTPException(
+                status_code=404, detail={"message": "Persona not found"}
+            )
 
     # Get user's group IDs once
     user_group_ids: set[int] | None = None
@@ -535,7 +550,7 @@ def get_available_providers_for_persona(
         .where(Persona.id == persona_id, Persona.deleted == False)  # noqa: E712
     )
     if not persona:
-        raise HTTPException(status_code=404, detail="Persona not found")
+        raise HTTPException(status_code=404, detail={"message": "Persona not found"})
 
     persona_group_ids = {group.id for group in persona.groups}
     available_providers: list[LLMProviderView] = []
@@ -543,7 +558,7 @@ def get_available_providers_for_persona(
         provider_persona_ids = {p.id for p in provider.personas}
         provider_group_ids = {group.id for group in provider.groups}
 
-        if is_llm_provider_effectively_public(provider) or (
+        if llm_provider_is_public(provider) or (
             persona.id in provider_persona_ids or persona_group_ids & provider_group_ids
         ):
             provider_view = LLMProviderView.from_model(provider)
@@ -560,7 +575,7 @@ def list_unrestricted_llm_providers(
 ) -> list[LLMProviderDescriptor]:
     descriptors: list[LLMProviderDescriptor] = []
     for provider in fetch_existing_llm_providers(db_session):
-        if not is_llm_provider_effectively_public(provider):
+        if not llm_provider_is_public(provider):
             continue
         descriptors.append(LLMProviderDescriptor.from_model(provider))
     return descriptors
@@ -579,7 +594,7 @@ def grant_persona_access_to_provider(
         .where(Persona.id == persona_id, Persona.deleted == False)  # noqa: E712
     )
     if not persona:
-        raise HTTPException(status_code=404, detail="Persona not found")
+        raise HTTPException(status_code=404, detail={"message": "Persona not found"})
 
     provider = db_session.scalar(
         select(LLMProviderModel)
@@ -591,7 +606,9 @@ def grant_persona_access_to_provider(
         .where(LLMProviderModel.id == request.provider_id)
     )
     if not provider:
-        raise HTTPException(status_code=404, detail="LLM Provider not found")
+        raise HTTPException(
+            status_code=404, detail={"message": "LLM Provider not found"}
+        )
 
     existing_persona_ids = [p.id for p in provider.personas]
     if persona.id not in existing_persona_ids:
@@ -635,7 +652,9 @@ def get_bedrock_available_models(
         except Exception as e:
             raise HTTPException(
                 status_code=400,
-                detail=f"Failed to create Bedrock client: {e}. Check AWS credentials and region.",
+                detail={
+                    "message": f"Failed to create Bedrock client: {e}. Check AWS credentials and region."
+                },
             )
 
         # Available Bedrock models: text-only, streaming supported
@@ -683,11 +702,13 @@ def get_bedrock_available_models(
 
     except (ClientError, NoCredentialsError, BotoCoreError) as e:
         raise HTTPException(
-            status_code=400, detail=f"Failed to connect to AWS Bedrock: {e}"
+            status_code=400,
+            detail={"message": f"Failed to connect to AWS Bedrock: {e}"},
         )
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Unexpected error fetching Bedrock models: {e}"
+            status_code=500,
+            detail={"message": f"Unexpected error fetching Bedrock models: {e}"},
         )
 
 
@@ -701,7 +722,7 @@ def _get_ollama_available_model_names(api_base: str) -> set[str]:
     except Exception as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Failed to fetch Ollama models: {e}",
+            detail={"message": f"Failed to fetch Ollama models: {e}"},
         )
 
     models = response_json.get("models", [])
@@ -718,14 +739,15 @@ def get_ollama_available_models(
     cleaned_api_base = request.api_base.strip().rstrip("/")
     if not cleaned_api_base:
         raise HTTPException(
-            status_code=400, detail="API base URL is required to fetch Ollama models."
+            status_code=400,
+            detail={"message": "API base URL is required to fetch Ollama models."},
         )
 
     model_names = _get_ollama_available_model_names(cleaned_api_base)
     if not model_names:
         raise HTTPException(
             status_code=400,
-            detail="No models found from your Ollama server",
+            detail={"message": "No models found from your Ollama server"},
         )
 
     all_models_with_context_size_and_vision: list[OllamaFinalModelResponse] = []

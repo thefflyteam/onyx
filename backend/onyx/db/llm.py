@@ -1,8 +1,11 @@
 from sqlalchemy import delete
+from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import BooleanClauseList
+from sqlalchemy.sql.elements import ColumnElement
 
 from onyx.configs.app_configs import AUTH_TYPE
 from onyx.configs.constants import AuthType
@@ -83,15 +86,14 @@ def get_personas_for_llm_provider(
     )
 
 
-def is_llm_provider_effectively_public(provider: LLMProviderModel) -> bool:
+def llm_provider_is_public(provider: LLMProviderModel) -> bool:
     """Determine whether a provider should be treated as unrestricted.
 
-    Explicitly public providers are always accessible. Providers with no group
-    or persona restrictions are also treated as public to preserve historical
-    behaviour where `is_public=False` with empty restrictions still allowed
-    universal access.
+    Providers with no group or persona restrictions are treated as public.
+    If any restrictions are set (groups or personas), the provider is restricted
+    regardless of the is_public flag.
     """
-    return provider.is_public or (not provider.groups and not provider.personas)
+    return not provider.groups and not provider.personas
 
 
 def can_user_access_llm_provider(
@@ -113,7 +115,7 @@ def can_user_access_llm_provider(
     locking providers when both lists are blank. Callers may provide
     ``user_group_ids`` to skip re-querying group membership.
     """
-    if is_llm_provider_effectively_public(provider):
+    if llm_provider_is_public(provider):
         return True
 
     allowed_group_ids = {group.id for group in provider.groups}
@@ -226,10 +228,14 @@ def upsert_llm_provider(
 
     db_session.flush()
     db_session.refresh(existing_llm_provider)
+
+    try:
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        raise ValueError(f"Failed to save LLM provider: {str(e)}") from e
+
     full_llm_provider = LLMProviderView.from_model(existing_llm_provider)
-
-    db_session.commit()
-
     return full_llm_provider
 
 
@@ -264,11 +270,7 @@ def fetch_existing_llm_providers(
     )
     providers = list(db_session.scalars(stmt).all())
     if only_public:
-        return [
-            provider
-            for provider in providers
-            if is_llm_provider_effectively_public(provider)
-        ]
+        return [provider for provider in providers if llm_provider_is_public(provider)]
     return providers
 
 
@@ -292,39 +294,56 @@ def fetch_existing_llm_providers_for_user(
     db_session: Session,
     user: User | None = None,
 ) -> list[LLMProviderModel]:
-    providers = fetch_existing_llm_providers(db_session)
+    """Fetch LLM providers accessible to the user using database-level filtering.
 
-    # if user is anonymous
-    if not user:
-        # Only fetch public providers if auth is turned on
-        if AUTH_TYPE == AuthType.DISABLED:
-            return providers
-        return [
-            provider
-            for provider in providers
-            if is_llm_provider_effectively_public(provider)
-        ]
-
-    user_group_ids = set(
-        db_session.scalars(
-            select(User__UserGroup.user_group_id).where(
-                User__UserGroup.user_id == user.id
-            )
-        ).all()
+    Uses OR-based access control:
+    - Providers with no restrictions (effectively public)
+    - Providers where user is in an allowed group
+    """
+    # Start with base query
+    stmt = select(LLMProviderModel).options(
+        selectinload(LLMProviderModel.model_configurations),
+        selectinload(LLMProviderModel.groups),
+        selectinload(LLMProviderModel.personas),
     )
 
-    accessible_providers: list[LLMProviderModel] = []
-    for provider in providers:
-        if can_user_access_llm_provider(
-            db_session=db_session,
-            provider=provider,
-            user=user,
-            persona=None,
-            user_group_ids=user_group_ids,
-        ):
-            accessible_providers.append(provider)
+    # If user is anonymous and auth is disabled, return all providers
+    if not user and AUTH_TYPE == AuthType.DISABLED:
+        return list(db_session.scalars(stmt).all())
 
-    return accessible_providers
+    # Build OR conditions for access control
+    conditions: list[BooleanClauseList | ColumnElement[bool]] = []
+
+    # Condition 1: Providers with no group restrictions AND no persona restrictions
+    # (effectively public - see llm_provider_is_public)
+    # We check this by looking for providers that don't have any entries in the join tables
+    conditions.append(~LLMProviderModel.groups.any() & ~LLMProviderModel.personas.any())
+
+    # Condition 2: If user is authenticated, include providers where user is in allowed group
+    if user:
+        user_group_ids = list(
+            db_session.scalars(
+                select(User__UserGroup.user_group_id).where(
+                    User__UserGroup.user_id == user.id
+                )
+            ).all()
+        )
+
+        if user_group_ids:
+            conditions.append(
+                LLMProviderModel.groups.any(
+                    LLMProvider__UserGroup.user_group_id.in_(user_group_ids)
+                )
+            )
+
+    # Apply OR filter
+    if conditions:
+        stmt = stmt.where(or_(*conditions))
+    else:
+        # No conditions means no access (anonymous user with auth enabled)
+        return []
+
+    return list(db_session.scalars(stmt).all())
 
 
 def fetch_embedding_provider(

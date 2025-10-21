@@ -93,17 +93,17 @@ def get_llms_for_persona(
             raise ValueError("No LLM provider found")
 
         persona_model = persona if isinstance(persona, Persona) else None
-        if user is not None and not can_user_access_llm_provider(
+        if not can_user_access_llm_provider(
             db_session=db_session,
             provider=provider_model,
             user=user,
             persona=persona_model,
         ):
             logger.warning(
-                "User %s cannot access provider %s for persona %s. Falling back to default provider.",
+                "User %s with persona %s cannot access provider %s. Falling back to default provider.",
                 getattr(user, "id", None),
-                provider_model.name,
                 getattr(persona_model, "id", None),
+                provider_model.name,
             )
             return get_default_llms(
                 temperature=temperature_override or GEN_AI_TEMPERATURE,

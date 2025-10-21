@@ -3,7 +3,6 @@ import { LLMProviderDescriptor } from "@/app/admin/configuration/llm/interfaces"
 import { errorHandlingFetcher } from "@/lib/fetcher";
 
 export function useLLMProviders(personaId?: number) {
-  // Build URL with persona_id filter if provided
   const url = personaId
     ? `/api/llm/provider?persona_id=${personaId}`
     : "/api/llm/provider";

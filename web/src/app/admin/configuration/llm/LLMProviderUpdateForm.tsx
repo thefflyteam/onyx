@@ -118,9 +118,16 @@ export function LLMProviderUpdateForm({
 
   // Helper function to get current model configurations
   const getCurrentModelConfigurations = (values: any): ModelConfiguration[] => {
-    return values.fetched_model_configurations?.length > 0
-      ? values.fetched_model_configurations
-      : llmProviderDescriptor.model_configurations;
+    // If user clicked "Fetch Available Models", use those
+    if (values.fetched_model_configurations?.length > 0) {
+      return values.fetched_model_configurations;
+    }
+    // If editing an existing provider, use its models
+    if (existingLlmProvider?.model_configurations?.length > 0) {
+      return existingLlmProvider.model_configurations;
+    }
+    // Otherwise use the descriptor's default models
+    return llmProviderDescriptor.model_configurations;
   };
 
   // Define the initial values based on the provider's requirements

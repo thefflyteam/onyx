@@ -1,10 +1,11 @@
 import pytest
 import requests
+from sqlalchemy.orm import Session
 
 from onyx.context.search.enums import RecencyBiasSetting
 from onyx.db.engine.sql_engine import get_session_with_current_tenant
 from onyx.db.llm import can_user_access_llm_provider
-from onyx.db.llm import is_llm_provider_effectively_public
+from onyx.db.llm import llm_provider_is_public
 from onyx.db.models import LLMProvider as LLMProviderModel
 from onyx.db.models import LLMProvider__Persona
 from onyx.db.models import LLMProvider__UserGroup
@@ -22,7 +23,7 @@ from tests.integration.common_utils.test_models import DATestUser
 
 
 def _create_llm_provider(
-    db_session,
+    db_session: Session,
     *,
     name: str,
     default_model_name: str,
@@ -51,7 +52,7 @@ def _create_llm_provider(
 
 
 def _create_persona(
-    db_session,
+    db_session: Session,
     *,
     name: str,
     provider_name: str,
@@ -159,9 +160,9 @@ def test_can_user_access_llm_provider_or_logic(
         assert admin_model is not None
         assert basic_model is not None
 
-        assert is_llm_provider_effectively_public(default_provider)
-        assert is_llm_provider_effectively_public(unrestricted_provider)
-        assert not is_llm_provider_effectively_public(restricted_provider)
+        assert llm_provider_is_public(default_provider)
+        assert llm_provider_is_public(unrestricted_provider)
+        assert not llm_provider_is_public(restricted_provider)
 
         assert can_user_access_llm_provider(
             db_session=db_session,

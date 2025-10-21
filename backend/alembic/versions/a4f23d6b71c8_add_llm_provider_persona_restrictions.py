@@ -36,9 +36,18 @@ def upgrade() -> None:
         "llm_provider__persona",
         ["persona_id"],
     )
+    op.create_index(
+        "ix_llm_provider__persona_composite",
+        "llm_provider__persona",
+        ["persona_id", "llm_provider_id"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_llm_provider__persona_composite",
+        table_name="llm_provider__persona",
+    )
     op.drop_index(
         "ix_llm_provider__persona_persona_id",
         table_name="llm_provider__persona",
