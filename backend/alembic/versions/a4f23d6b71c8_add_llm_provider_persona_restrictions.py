@@ -1,7 +1,7 @@
 """add llm provider persona restrictions
 
 Revision ID: a4f23d6b71c8
-Revises: c8a93a2af083
+Revises: 3d1cca026fe8
 Create Date: 2025-10-21 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "a4f23d6b71c8"
-down_revision = "c8a93a2af083"
+down_revision = "3d1cca026fe8"
 branch_labels = None
 depends_on = None
 
