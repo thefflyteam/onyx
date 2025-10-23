@@ -25,7 +25,7 @@ import { PopupSpec } from "@/components/admin/connectors/Popup";
 import * as Yup from "yup";
 import isEqual from "lodash/isEqual";
 import { IsPublicGroupSelector } from "@/components/IsPublicGroupSelector";
-import { PersonasMultiSelect } from "@/components/PersonasMultiSelect";
+import { AgentsMultiSelect } from "@/components/AgentsMultiSelect";
 import SvgTrash from "@/icons/trash";
 
 function AutoFetchModelsOnEdit({
@@ -119,12 +119,12 @@ export function LLMProviderUpdateForm({
   // Helper function to get current model configurations
   const getCurrentModelConfigurations = (values: any): ModelConfiguration[] => {
     // If user clicked "Fetch Available Models", use those
-    if (values.fetched_model_configurations?.length > 0) {
+    if ((values.fetched_model_configurations?.length ?? 0) > 0) {
       return values.fetched_model_configurations;
     }
     // If editing an existing provider, use its models
-    if (existingLlmProvider?.model_configurations?.length > 0) {
-      return existingLlmProvider.model_configurations;
+    if ((existingLlmProvider?.model_configurations?.length ?? 0) > 0) {
+      return existingLlmProvider?.model_configurations ?? [];
     }
     // Otherwise use the descriptor's default models
     return llmProviderDescriptor.model_configurations;
@@ -356,6 +356,14 @@ export function LLMProviderUpdateForm({
           }
         }
 
+        const requestBody = {
+          provider: llmProviderDescriptor.name,
+          ...finalValues,
+          fast_default_model_name:
+            finalValues.fast_default_model_name ||
+            finalValues.default_model_name,
+        };
+
         const response = await fetch(
           `${LLM_PROVIDERS_ADMIN_URL}${
             existingLlmProvider ? "" : "?is_creation=true"
@@ -365,13 +373,7 @@ export function LLMProviderUpdateForm({
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-              provider: llmProviderDescriptor.name,
-              ...finalValues,
-              fast_default_model_name:
-                finalValues.fast_default_model_name ||
-                finalValues.default_model_name,
-            }),
+            body: JSON.stringify(requestBody),
           }
         );
 
@@ -713,9 +715,9 @@ export function LLMProviderUpdateForm({
                         publicToWhom="Users"
                         enforceGroupSelection={true}
                       />
-                      <PersonasMultiSelect
+                      <AgentsMultiSelect
                         formikProps={formikProps}
-                        label="Assistant Whitelist (Optional)"
+                        label="Assistant Whitelist"
                         subtext="Restrict this provider to specific assistants. If none selected, all assistants that the user has access to can use this provider."
                       />
                     </>

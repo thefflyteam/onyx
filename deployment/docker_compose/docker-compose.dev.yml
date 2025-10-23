@@ -12,6 +12,8 @@ services:
   api_server:
     ports:
       - "8080:8080"
+    environment:
+      - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=${ENABLE_PAID_ENTERPRISE_EDITION_FEATURES:-false}
 
   relational_db:
     ports:
@@ -31,3 +33,7 @@ services:
     ports:
       - "9004:9000"
       - "9005:9001"
+
+  background:
+    environment:
+      - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=${ENABLE_PAID_ENTERPRISE_EDITION_FEATURES:-false}

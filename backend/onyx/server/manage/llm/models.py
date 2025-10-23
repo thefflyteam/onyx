@@ -216,10 +216,6 @@ class LLMProviderUsageResponse(BaseModel):
     personas: list[LLMProviderUsagePersona]
 
 
-class GrantProviderAccessRequest(BaseModel):
-    provider_id: int
-
-
 class LLMCost(BaseModel):
     provider: str
     model_name: str

@@ -66,7 +66,7 @@ def get_main_llm_from_tuple(
 
 def get_llms_for_persona(
     persona: Persona | PersonaOverrideConfig | None,
-    user: User | None = None,
+    user: User | None,
     llm_override: LLMOverride | None = None,
     additional_headers: dict[str, str] | None = None,
     long_term_logger: LongTermLogger | None = None,

@@ -124,42 +124,33 @@ export default function LLMPopover({
         className="max-h-[20rem] w-[15rem] p-spacing-inline border rounded-08 shadow-lg flex flex-col"
       >
         <div className="overflow-y-scroll">
-          {(() => {
-            const renderedModels: string[] = [];
-            const filteredModels: string[] = [];
-
-            const items = llmOptionsToChooseFrom.map(
-              ({ modelName, provider, name, icon }, index) => {
-                if (
-                  requiresImageGeneration &&
-                  !modelSupportsImageInput(llmProviders, modelName, name)
-                ) {
-                  filteredModels.push(modelName);
-                  return null;
-                }
-                renderedModels.push(modelName);
-                return (
-                  <LineItem
-                    key={index}
-                    icon={({ className }) => icon({ size: 16, className })}
-                    onClick={() => {
-                      llmManager.updateCurrentLlm({
-                        modelName,
-                        provider,
-                        name,
-                      } as LlmDescriptor);
-                      onSelect?.(structureValue(name, provider, modelName));
-                      setOpen(false);
-                    }}
-                  >
-                    {getDisplayNameForModel(modelName)}
-                  </LineItem>
-                );
+          {llmOptionsToChooseFrom.map(
+            ({ modelName, provider, name, icon }, index) => {
+              if (
+                requiresImageGeneration &&
+                !modelSupportsImageInput(llmProviders, modelName, name)
+              ) {
+                return null;
               }
-            );
-
-            return items;
-          })()}
+              return (
+                <LineItem
+                  key={index}
+                  icon={({ className }) => icon({ size: 16, className })}
+                  onClick={() => {
+                    llmManager.updateCurrentLlm({
+                      modelName,
+                      provider,
+                      name,
+                    } as LlmDescriptor);
+                    onSelect?.(structureValue(name, provider, modelName));
+                    setOpen(false);
+                  }}
+                >
+                  {getDisplayNameForModel(modelName)}
+                </LineItem>
+              );
+            }
+          )}
         </div>
         {user?.preferences?.temperature_override_enabled && (
           <div className="flex flex-col w-full py-padding-button px-spacing-interline gap-spacing-interline">

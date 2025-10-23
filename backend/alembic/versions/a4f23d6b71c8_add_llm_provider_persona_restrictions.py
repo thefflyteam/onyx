@@ -22,8 +22,10 @@ def upgrade() -> None:
         "llm_provider__persona",
         sa.Column("llm_provider_id", sa.Integer(), nullable=False),
         sa.Column("persona_id", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(["llm_provider_id"], ["llm_provider.id"]),
-        sa.ForeignKeyConstraint(["persona_id"], ["persona.id"]),
+        sa.ForeignKeyConstraint(
+            ["llm_provider_id"], ["llm_provider.id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(["persona_id"], ["persona.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("llm_provider_id", "persona_id"),
     )
     op.create_index(

@@ -34,7 +34,7 @@ export default function CoreModal({
 
   const modalContent = (
     <div
-      className="fixed inset-0 z-[2000] flex items-center justify-center bg-mask-03 backdrop-blur-[1px]"
+      className="fixed inset-0 z-[2000] flex items-center justify-center bg-mask-03 backdrop-blur-xl"
       onClick={() => (insideModal.current ? undefined : onClickOutside?.())}
     >
       <div

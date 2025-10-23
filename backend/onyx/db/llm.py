@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from sqlalchemy import delete
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -134,13 +136,64 @@ def can_user_access_llm_provider(
         if resolved_user_group_ids & allowed_group_ids:
             return True
 
-    persona_id = persona.id if isinstance(persona, Persona) else None
+    persona_id = persona.id if persona else None
     if persona_id is not None:
         provider_persona_ids = {allowed.id for allowed in provider.personas}
         if persona_id in provider_persona_ids:
             return True
 
     return False
+
+
+def validate_persona_ids_exist(
+    db_session: Session, persona_ids: list[int]
+) -> tuple[set[int], list[int]]:
+    """Validate that persona IDs exist in the database.
+
+    Returns:
+        Tuple of (fetched_persona_ids, missing_personas)
+    """
+    fetched_persona_ids = set(
+        db_session.scalars(select(Persona.id).where(Persona.id.in_(persona_ids))).all()
+    )
+    missing_personas = sorted(set(persona_ids) - fetched_persona_ids)
+    return fetched_persona_ids, missing_personas
+
+
+def get_personas_using_provider(
+    db_session: Session, provider_name: str
+) -> list[Persona]:
+    """Get all non-deleted personas that use a specific LLM provider."""
+    return list(
+        db_session.scalars(
+            select(Persona).where(
+                Persona.llm_model_provider_override == provider_name,
+                Persona.deleted == False,  # noqa: E712
+            )
+        ).all()
+    )
+
+
+def fetch_persona_with_groups(db_session: Session, persona_id: int) -> Persona | None:
+    """Fetch a persona with its groups eagerly loaded."""
+    return db_session.scalar(
+        select(Persona)
+        .options(selectinload(Persona.groups))
+        .where(Persona.id == persona_id, Persona.deleted == False)  # noqa: E712
+    )
+
+
+def fetch_user_group_ids(db_session: Session, user_id: UUID) -> set[int]:
+    """Fetch all group IDs for a user."""
+    from onyx.db.models import User__UserGroup
+
+    return set(
+        db_session.scalars(
+            select(User__UserGroup.user_group_id).where(
+                User__UserGroup.user_id == user_id
+            )
+        ).all()
+    )
 
 
 def upsert_cloud_embedding_provider(
@@ -407,15 +460,11 @@ def remove_embedding_provider(
 
 
 def remove_llm_provider(db_session: Session, provider_id: int) -> None:
-    # Remove LLMProvider's dependent relationships
+    # Remove LLMProvider's dependent relationships (UserGroup)
+    # Note: LLMProvider__Persona relationships are CASCADE deleted automatically
     db_session.execute(
         delete(LLMProvider__UserGroup).where(
             LLMProvider__UserGroup.llm_provider_id == provider_id
-        )
-    )
-    db_session.execute(
-        delete(LLMProvider__Persona).where(
-            LLMProvider__Persona.llm_provider_id == provider_id
         )
     )
     # Remove LLMProvider

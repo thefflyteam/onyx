@@ -301,7 +301,6 @@ def test_provider_usage_endpoint_and_delete_guard(reset: None) -> None:
 
 def test_available_provider_endpoints_and_grant_access(reset: None) -> None:
     admin_user = UserManager.create(name="admin_user")
-    basic_user = UserManager.create(name="basic_user")
 
     restricted_group = UserGroupManager.create(user_performing_action=admin_user)
     restricted_provider = LLMProviderManager.create(
@@ -332,8 +331,9 @@ def test_available_provider_endpoints_and_grant_access(reset: None) -> None:
     for provider_json in available_response.json():
         assert "****" in provider_json["api_key"]
 
+    # When creating a new persona, use the main /admin/llm/provider endpoint
     new_persona_response = requests.get(
-        f"{API_SERVER_URL}/admin/llm/persona/new/available-providers",
+        f"{API_SERVER_URL}/admin/llm/provider",
         headers=admin_user.headers,
     )
     assert new_persona_response.status_code == 200
@@ -341,35 +341,8 @@ def test_available_provider_endpoints_and_grant_access(reset: None) -> None:
         provider_json["id"] for provider_json in new_persona_response.json()
     }
     assert public_provider.id in new_persona_ids
-    assert restricted_provider.id not in new_persona_ids
+    # Admin can see all providers
+    assert restricted_provider.id in new_persona_ids
 
-    unrestricted_response = requests.get(
-        f"{API_SERVER_URL}/llm/unrestricted-providers",
-        headers=basic_user.headers,
-    )
-    assert unrestricted_response.status_code == 200
-    unrestricted_ids = {
-        provider_json["id"] for provider_json in unrestricted_response.json()
-    }
-    assert public_provider.id in unrestricted_ids
-    assert restricted_provider.id not in unrestricted_ids
-
-    grant_response = requests.post(
-        f"{API_SERVER_URL}/admin/llm/persona/{persona.id}/grant-provider-access",
-        json={"provider_id": restricted_provider.id},
-        headers=admin_user.headers,
-    )
-    assert grant_response.status_code == 200
-    grant_data = grant_response.json()
-    assert persona.id in grant_data["personas"]
-    assert "****" in grant_data["api_key"]
-
-    available_after_grant = requests.get(
-        f"{API_SERVER_URL}/admin/llm/persona/{persona.id}/available-providers",
-        headers=admin_user.headers,
-    )
-    assert available_after_grant.status_code == 200
-    available_after_ids = {
-        provider_json["id"] for provider_json in available_after_grant.json()
-    }
-    assert restricted_provider.id in available_after_ids
+    # Note: unrestricted-providers and grant-provider-access endpoints were removed as unused
+    # The RBAC functionality is now tested through the main /llm/provider endpoint

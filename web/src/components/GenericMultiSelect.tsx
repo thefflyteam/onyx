@@ -1,4 +1,4 @@
-import { FormikProps } from "formik";
+import { FormikProps, ErrorMessage } from "formik";
 import { Label } from "@/components/Field";
 import Text from "@/refresh-components/texts/Text";
 import { SearchMultiSelectDropdown } from "@/components/Dropdown";
@@ -71,10 +71,14 @@ export function GenericMultiSelect<
   const selectedIds = (formikProps.values[fieldName] as number[]) || [];
   const selectedItems = items.filter((item) => selectedIds.includes(item.id));
 
-  const handleSelect = (option: { name: string; value: number }) => {
+  const handleSelect = (option: { name: string; value: string | number }) => {
     const currentIds = (formikProps.values[fieldName] as number[]) || [];
-    if (!currentIds.includes(option.value)) {
-      formikProps.setFieldValue(fieldName, [...currentIds, option.value]);
+    const numValue =
+      typeof option.value === "string"
+        ? parseInt(option.value, 10)
+        : option.value;
+    if (!currentIds.includes(numValue)) {
+      formikProps.setFieldValue(fieldName, [...currentIds, numValue]);
     }
   };
 
@@ -122,6 +126,12 @@ export function GenericMultiSelect<
           ))}
         </div>
       )}
+
+      <ErrorMessage
+        name={fieldName}
+        component="div"
+        className="text-error text-sm mt-1"
+      />
     </div>
   );
 }

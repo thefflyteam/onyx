@@ -3073,9 +3073,11 @@ class LLMProvider__Persona(Base):
     __tablename__ = "llm_provider__persona"
 
     llm_provider_id: Mapped[int] = mapped_column(
-        ForeignKey("llm_provider.id"), primary_key=True
+        ForeignKey("llm_provider.id", ondelete="CASCADE"), primary_key=True
     )
-    persona_id: Mapped[int] = mapped_column(ForeignKey("persona.id"), primary_key=True)
+    persona_id: Mapped[int] = mapped_column(
+        ForeignKey("persona.id", ondelete="CASCADE"), primary_key=True
+    )
 
 
 class LLMProvider__UserGroup(Base):

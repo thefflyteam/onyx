@@ -3,9 +3,10 @@ import { LLMProviderDescriptor } from "@/app/admin/configuration/llm/interfaces"
 import { errorHandlingFetcher } from "@/lib/fetcher";
 
 export function useLLMProviders(personaId?: number) {
-  const url = personaId
-    ? `/api/llm/provider?persona_id=${personaId}`
-    : "/api/llm/provider";
+  const url =
+    personaId !== undefined
+      ? `/api/llm/persona/${personaId}/providers`
+      : "/api/llm/provider";
 
   const { data, error, mutate } = useSWR<LLMProviderDescriptor[]>(
     url,
