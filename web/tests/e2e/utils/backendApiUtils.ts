@@ -131,16 +131,42 @@ export async function deleteCCPair(
   page: Page,
   ccPairId: number
 ): Promise<void> {
-  const response = await page.request.delete(
+  // First, get the CC pair details to extract connector_id and credential_id
+  const getResponse = await page.request.get(
     `http://localhost:3000/api/manage/admin/cc-pair/${ccPairId}`
   );
 
-  if (!response.ok()) {
-    const errorText = await response.text();
+  if (!getResponse.ok()) {
+    const errorText = await getResponse.text();
     console.error(
-      `[backendApiUtils] Failed to delete CC pair ${ccPairId}: ${response.status()} - ${errorText}`
+      `[backendApiUtils] Failed to get CC pair ${ccPairId} details: ${getResponse.status()} - ${errorText}`
+    );
+    return;
+  }
+
+  const ccPairInfo = await getResponse.json();
+  const connectorId = ccPairInfo.connector.id;
+  const credentialId = ccPairInfo.credential.id;
+
+  // Now delete using the deletion-attempt endpoint
+  const deleteResponse = await page.request.post(
+    `http://localhost:3000/api/manage/admin/deletion-attempt`,
+    {
+      data: {
+        connector_id: connectorId,
+        credential_id: credentialId,
+      },
+    }
+  );
+
+  if (!deleteResponse.ok()) {
+    const errorText = await deleteResponse.text();
+    console.error(
+      `[backendApiUtils] Failed to delete CC pair ${ccPairId}: ${deleteResponse.status()} - ${errorText}`
     );
   } else {
-    console.log(`[backendApiUtils] Deleted CC pair: ${ccPairId}`);
+    console.log(
+      `[backendApiUtils] Initiated deletion for CC pair: ${ccPairId} (connector: ${connectorId}, credential: ${credentialId})`
+    );
   }
 }

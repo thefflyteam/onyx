@@ -38,6 +38,9 @@ const getUpdateSubmitButton = (page: Page) =>
   page.locator('button[type="submit"]:has-text("Update")');
 
 test.describe("Assistant Creation and Edit Verification", () => {
+  // Configure this entire suite to run serially to avoid test interference with connector presence from other tests.
+  test.describe.configure({ mode: "serial" });
+
   test.describe("with Team Knowledge (connector-based)", () => {
     let ccPairId: number;
     let documentSetId: number;
