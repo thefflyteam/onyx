@@ -2931,7 +2931,10 @@ export const OpenAISVG = ({
   );
 };
 export const OpenSourceIcon = createLogoIcon(openSourceIcon);
-export const OutlineIcon = createLogoIcon(outlinePNG);
+export const OutlineIcon = createLogoIcon(outlinePNG, {
+  sizeAdjustment: 4,
+  classNameAddition: "-m-0.5",
+});
 export const ProductboardIcon = createLogoIcon(productboardIcon);
 export const QwenIcon = createLogoIcon(qwenSVG);
 export const R2Icon = createLogoIcon(r2Icon);
