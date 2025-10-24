@@ -117,7 +117,7 @@ test.describe("Assistant Creation and Edit Verification", () => {
       await knowledgeToggle.scrollIntoViewIfNeeded();
 
       // Verify toggle is NOT disabled
-      await expect(knowledgeToggle).not.toHaveAttribute("disabled");
+      await expect(knowledgeToggle).not.toBeDisabled();
 
       // Check if it's already enabled, if not, enable it
       const isKnowledgeEnabled =
@@ -312,7 +312,7 @@ test.describe("Assistant Creation and Edit Verification", () => {
       // Verify Knowledge toggle is disabled (no connectors)
       const knowledgeToggle = getKnowledgeToggle(page);
       await knowledgeToggle.scrollIntoViewIfNeeded();
-      await expect(knowledgeToggle).toHaveAttribute("data-disabled", "");
+      await expect(knowledgeToggle).toBeDisabled();
       await expect(knowledgeToggle).toHaveAttribute("aria-checked", "false");
 
       // Verify "Add User Files" button is visible even without connectors
