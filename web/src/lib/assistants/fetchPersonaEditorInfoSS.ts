@@ -26,7 +26,7 @@ export async function fetchAssistantEditorInfoSS(
   // When creating a new persona, fetch all providers
   const llmProvidersUrl =
     personaId !== undefined
-      ? `/admin/llm/persona/${personaId}/available-providers`
+      ? `/llm/persona/${personaId}/providers`
       : "/llm/provider";
 
   const tasks = [

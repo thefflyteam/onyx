@@ -1,3 +1,5 @@
+import os
+
 import pytest
 import requests
 from sqlalchemy.orm import Session
@@ -18,8 +20,13 @@ from tests.integration.common_utils.constants import API_SERVER_URL
 from tests.integration.common_utils.managers.llm_provider import LLMProviderManager
 from tests.integration.common_utils.managers.persona import PersonaManager
 from tests.integration.common_utils.managers.user import UserManager
-from tests.integration.common_utils.managers.user_group import UserGroupManager
 from tests.integration.common_utils.test_models import DATestUser
+
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("ENABLE_PAID_ENTERPRISE_EDITION_FEATURES", "").lower() != "true",
+    reason="LLM provider access control is enterprise only",
+)
 
 
 def _create_llm_provider(
@@ -42,7 +49,9 @@ def _create_llm_provider(
         fast_default_model_name=fast_model_name,
         deployment_name=None,
         is_public=is_public,
-        is_default_provider=is_default,
+        # Use None instead of False to avoid unique constraint violation
+        # The is_default_provider column has unique=True, so only one True and one False allowed
+        is_default_provider=is_default if is_default else None,
         is_default_vision_provider=False,
         default_vision_model=None,
     )
@@ -257,8 +266,17 @@ def test_get_llms_for_persona_falls_back_when_access_denied(
         assert fallback_llm.config.model_name == default_provider.default_model_name
 
 
-def test_provider_usage_endpoint_and_delete_guard(reset: None) -> None:
+def test_provider_delete_clears_persona_references(reset: None) -> None:
+    """Test that deleting a provider automatically clears persona references."""
     admin_user = UserManager.create(name="admin_user")
+
+    # Create a default provider first so personas have something to fall back to
+    LLMProviderManager.create(
+        name="default-provider",
+        is_public=True,
+        set_as_default=True,
+        user_performing_action=admin_user,
+    )
 
     provider = LLMProviderManager.create(
         is_public=False,
@@ -270,79 +288,17 @@ def test_provider_usage_endpoint_and_delete_guard(reset: None) -> None:
         user_performing_action=admin_user,
     )
 
-    usage_response = requests.get(
-        f"{API_SERVER_URL}/admin/llm/provider/{provider.id}/usage",
-        headers=admin_user.headers,
-    )
-    assert usage_response.status_code == 200
-    usage_data = usage_response.json()
-    assert usage_data["personas"]
-    assert usage_data["personas"][0]["id"] == persona.id
-
-    delete_response = requests.delete(
-        f"{API_SERVER_URL}/admin/llm/provider/{provider.id}",
-        headers=admin_user.headers,
-    )
-    assert delete_response.status_code == 400
-    detail = delete_response.json()["detail"]
-    assert persona.name in detail["personas"]
-
-    persona = PersonaManager.edit(
-        persona=persona,
-        llm_model_provider_override=None,
-        user_performing_action=admin_user,
-    )
-
+    # Delete the provider - should succeed and automatically clear persona references
     assert LLMProviderManager.delete(
         provider,
         user_performing_action=admin_user,
     )
 
-
-def test_available_provider_endpoints_and_grant_access(reset: None) -> None:
-    admin_user = UserManager.create(name="admin_user")
-
-    restricted_group = UserGroupManager.create(user_performing_action=admin_user)
-    restricted_provider = LLMProviderManager.create(
-        groups=[restricted_group.id],
-        personas=[],
-        is_public=False,
-        set_as_default=False,
-        user_performing_action=admin_user,
-    )
-    public_provider = LLMProviderManager.create(
-        is_public=True,
-        set_as_default=False,
-        user_performing_action=admin_user,
-    )
-    persona = PersonaManager.create(
-        groups=[],
-        user_performing_action=admin_user,
-    )
-
-    available_response = requests.get(
-        f"{API_SERVER_URL}/admin/llm/persona/{persona.id}/available-providers",
+    # Verify the persona now falls back to default (llm_model_provider_override cleared)
+    persona_response = requests.get(
+        f"{API_SERVER_URL}/persona/{persona.id}",
         headers=admin_user.headers,
     )
-    assert available_response.status_code == 200
-    available_ids = {provider_json["id"] for provider_json in available_response.json()}
-    assert public_provider.id in available_ids
-    assert restricted_provider.id not in available_ids
-    for provider_json in available_response.json():
-        assert "****" in provider_json["api_key"]
-
-    # When creating a new persona, use the main /admin/llm/provider endpoint
-    new_persona_response = requests.get(
-        f"{API_SERVER_URL}/admin/llm/provider",
-        headers=admin_user.headers,
-    )
-    assert new_persona_response.status_code == 200
-    new_persona_ids = {
-        provider_json["id"] for provider_json in new_persona_response.json()
-    }
-    assert public_provider.id in new_persona_ids
-    # Admin can see all providers
-    assert restricted_provider.id in new_persona_ids
-
-    # Note: unrestricted-providers and grant-provider-access endpoints were removed as unused
-    # The RBAC functionality is now tested through the main /llm/provider endpoint
+    assert persona_response.status_code == 200
+    updated_persona = persona_response.json()
+    assert updated_persona["llm_model_provider_override"] is None

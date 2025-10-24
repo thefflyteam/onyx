@@ -25,7 +25,6 @@ from onyx.db.llm import fetch_existing_llm_providers
 from onyx.db.llm import fetch_persona_with_groups
 from onyx.db.llm import fetch_user_group_ids
 from onyx.db.llm import get_personas_using_provider
-from onyx.db.llm import llm_provider_is_public
 from onyx.db.llm import remove_llm_provider
 from onyx.db.llm import update_default_provider
 from onyx.db.llm import update_default_vision_provider
@@ -48,8 +47,6 @@ from onyx.server.manage.llm.models import BedrockModelsRequest
 from onyx.server.manage.llm.models import LLMCost
 from onyx.server.manage.llm.models import LLMProviderDescriptor
 from onyx.server.manage.llm.models import LLMProviderUpsertRequest
-from onyx.server.manage.llm.models import LLMProviderUsagePersona
-from onyx.server.manage.llm.models import LLMProviderUsageResponse
 from onyx.server.manage.llm.models import LLMProviderView
 from onyx.server.manage.llm.models import ModelConfigurationUpsertRequest
 from onyx.server.manage.llm.models import OllamaFinalModelResponse
@@ -305,39 +302,15 @@ def delete_llm_provider(
     if not provider:
         raise HTTPException(status_code=404, detail="LLM Provider not found")
 
+    # Clear the provider override from any personas using it
+    # This causes them to fall back to the default provider
     personas_using_provider = get_personas_using_provider(db_session, provider.name)
-    if personas_using_provider:
-        in_use_personas = [p.name for p in personas_using_provider]
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": (
-                    "Cannot delete provider while the following assistants reference it."
-                ),
-                "personas": in_use_personas,
-            },
-        )
+    for persona in personas_using_provider:
+        persona.llm_model_provider_override = None
+
+    db_session.flush()
 
     remove_llm_provider(db_session, provider_id)
-
-
-@admin_router.get("/provider/{provider_id}/usage")
-def get_llm_provider_usage(
-    provider_id: int,
-    _: User | None = Depends(current_admin_user),
-    db_session: Session = Depends(get_session),
-) -> LLMProviderUsageResponse:
-    provider = db_session.get(LLMProviderModel, provider_id)
-    if not provider:
-        raise HTTPException(status_code=404, detail="LLM Provider not found")
-
-    personas = get_personas_using_provider(db_session, provider.name)
-    return LLMProviderUsageResponse(
-        personas=[
-            LLMProviderUsagePersona(id=persona.id, name=persona.name)
-            for persona in personas
-        ]
-    )
 
 
 @admin_router.post("/provider/{provider_id}/default")
@@ -529,32 +502,6 @@ def get_provider_contextual_cost(
             )
 
     return costs
-
-
-@admin_router.get("/persona/{persona_id}/available-providers")
-def get_available_providers_for_persona(
-    persona_id: int,
-    _: User | None = Depends(current_admin_user),
-    db_session: Session = Depends(get_session),
-) -> list[LLMProviderView]:
-    persona = fetch_persona_with_groups(db_session, persona_id)
-    if not persona:
-        raise HTTPException(status_code=404, detail="Persona not found")
-
-    persona_group_ids = {group.id for group in persona.groups}
-    available_providers: list[LLMProviderView] = []
-    for provider in fetch_existing_llm_providers(db_session):
-        provider_persona_ids = {p.id for p in provider.personas}
-        provider_group_ids = {group.id for group in provider.groups}
-
-        if llm_provider_is_public(provider) or (
-            persona.id in provider_persona_ids or persona_group_ids & provider_group_ids
-        ):
-            provider_view = LLMProviderView.from_model(provider)
-            _mask_provider_api_key(provider_view)
-            available_providers.append(provider_view)
-
-    return available_providers
 
 
 @admin_router.post("/bedrock/available-models")

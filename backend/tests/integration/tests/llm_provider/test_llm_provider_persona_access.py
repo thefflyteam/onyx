@@ -2,6 +2,8 @@
 Integration tests for LLM Provider persona access authorization.
 """
 
+import os
+
 import pytest
 import requests
 
@@ -11,6 +13,12 @@ from tests.integration.common_utils.managers.persona import PersonaManager
 from tests.integration.common_utils.managers.user import UserManager
 from tests.integration.common_utils.managers.user_group import UserGroupManager
 from tests.integration.common_utils.test_models import DATestUser
+
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("ENABLE_PAID_ENTERPRISE_EDITION_FEATURES", "").lower() != "true",
+    reason="LLM provider persona access is enterprise only",
+)
 
 
 @pytest.fixture()
@@ -186,6 +194,17 @@ def test_public_persona_accessible_to_all(
     """Test that public personas are accessible to all users."""
     admin_user, basic_user, group1_id, group2_id = users_and_groups
 
+    # Create a public LLM provider so there's something to return
+    public_provider = LLMProviderManager.create(
+        user_performing_action=admin_user,
+        name="Public Provider",
+        provider="openai",
+        api_key="test-key",
+        default_model_name="gpt-4o",
+        is_public=True,
+        set_as_default=True,
+    )
+
     # Create a public persona
     public_persona = PersonaManager.create(
         user_performing_action=admin_user,
@@ -205,8 +224,10 @@ def test_public_persona_accessible_to_all(
     assert response.status_code == 200
     providers = response.json()
 
-    # Should return some providers (at least the default ones)
+    # Should return the public provider
     assert len(providers) > 0
+    provider_names = [p["name"] for p in providers]
+    assert public_provider.name in provider_names
 
 
 def test_nonexistent_persona_returns_404(
