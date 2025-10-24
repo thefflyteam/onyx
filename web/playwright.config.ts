@@ -25,6 +25,11 @@ export default defineConfig({
   ],
   // Only run Playwright tests from tests/e2e directory (ignore Jest tests in src/)
   testMatch: /.*\/tests\/e2e\/.*\.spec\.ts/,
+  outputDir: "test-results",
+  use: {
+    // Capture trace on first retry and on failure
+    trace: "on-first-retry",
+  },
   projects: [
     {
       name: "admin",
